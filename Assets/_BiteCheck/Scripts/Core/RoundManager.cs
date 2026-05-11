@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using BiteCheck.Characters;
 using BiteCheck.Data;
 using BiteCheck.Input;
@@ -15,11 +16,20 @@ namespace BiteCheck.Core
         [SerializeField] private SurvivorCharacter survivorPrefab;
         [SerializeField] private Transform spawnPoint;
         [SerializeField] private Transform decisionPoint;
+        [SerializeField] private Transform quarantineZone;
+        [SerializeField] private Transform shelterGate;
+        [SerializeField] private UpgradeSystem upgradeSystem;
 
         [Header("Timing")]
-        [SerializeField] private float throwForce = 5.5f;
-        [SerializeField] private float nextSurvivorDelay = 1f;
+        [SerializeField] private float nextSurvivorDelay = 1.15f;
         [SerializeField] private float decisionTime = 5f;
+
+        [Header("Throw")]
+        [SerializeField] private float throwForce = 5.8f;
+        [SerializeField] private float upwardForce = 0.08f;
+        [SerializeField] private float torqueForce = 1.5f;
+        [SerializeField] private float admitExitWalkSpeed = 4.8f;
+        [SerializeField] private float admitExitDespawnDelay = 0.15f;
 
         private StatsManager statsManager;
         private SurvivorCharacter currentSurvivor;
@@ -27,6 +37,7 @@ namespace BiteCheck.Core
         private bool waitingForDecision;
         private float timerRemaining;
         private Coroutine nextSurvivorRoutine;
+        private List<SurvivorCase> currentDayCases;
 
         public event Action<SurvivorCase> OnSurvivorSpawned;
         public event Action<SurvivorCase> OnSurvivorReadyForDecision;
@@ -38,6 +49,11 @@ namespace BiteCheck.Core
             if (swipeInput == null)
             {
                 swipeInput = FindFirstObjectByType<SwipeInputController>();
+            }
+
+            if (upgradeSystem == null)
+            {
+                upgradeSystem = FindFirstObjectByType<UpgradeSystem>();
             }
 
             EnsureDefaultPoints();
@@ -100,6 +116,7 @@ namespace BiteCheck.Core
             dayActive = true;
             waitingForDecision = false;
             timerRemaining = 0f;
+            currentDayCases = CaseDatabase.GetCasesForDay(statsManager.Day);
             OnDecisionTimerChanged?.Invoke(timerRemaining, decisionTime);
             swipeInput?.LockInput();
             SpawnNextSurvivor();
@@ -120,6 +137,18 @@ namespace BiteCheck.Core
             }
         }
 
+        public void ClearActiveSurvivor()
+        {
+            if (currentSurvivor == null)
+            {
+                return;
+            }
+
+            currentSurvivor.OnReachedDecisionPoint -= HandleSurvivorReachedDecisionPoint;
+            Destroy(currentSurvivor.gameObject);
+            currentSurvivor = null;
+        }
+
         private void SpawnNextSurvivor()
         {
             if (!dayActive || statsManager.IsGameOver() || statsManager.IsDayComplete())
@@ -127,7 +156,7 @@ namespace BiteCheck.Core
                 return;
             }
 
-            SurvivorCase survivorCase = CaseDatabase.GetRandomCase(statsManager.Day);
+            SurvivorCase survivorCase = GetNextCaseForCurrentDay();
             currentSurvivor = CreateSurvivor();
             currentSurvivor.transform.SetPositionAndRotation(spawnPoint.position, spawnPoint.rotation);
             currentSurvivor.Initialize(survivorCase);
@@ -151,6 +180,17 @@ namespace BiteCheck.Core
             }
 
             return survivor;
+        }
+
+        private SurvivorCase GetNextCaseForCurrentDay()
+        {
+            if (currentDayCases == null || currentDayCases.Count == 0)
+            {
+                currentDayCases = CaseDatabase.GetCasesForDay(statsManager.Day);
+            }
+
+            int caseIndex = Mathf.Clamp(statsManager.CurrentSurvivorIndex, 0, currentDayCases.Count - 1);
+            return currentDayCases[caseIndex];
         }
 
         private void HandleSurvivorReachedDecisionPoint(SurvivorCharacter survivor)
@@ -218,7 +258,7 @@ namespace BiteCheck.Core
             OnDecisionResolved?.Invoke(result);
 
             Debug.Log(result.FeedbackMessage);
-            ThrowCurrentSurvivor(decision);
+            ResolveCharacterExit(decision);
 
             if (statsManager.IsGameOver())
             {
@@ -244,25 +284,82 @@ namespace BiteCheck.Core
                     statsManager.RegisterCorrectDecision(result.ResourceDelta);
                     break;
                 case DecisionResultType.WrongAdmitInfected:
-                    statsManager.RegisterAdmittedInfected(Mathf.Abs(result.SecurityDelta));
+                    int securityPenalty = Mathf.Abs(result.SecurityDelta);
+                    if (upgradeSystem != null)
+                    {
+                        securityPenalty = upgradeSystem.ApplySecurityPenaltyReduction(securityPenalty);
+                    }
+
+                    statsManager.RegisterAdmittedInfected(securityPenalty);
                     break;
                 case DecisionResultType.WrongQuarantineHuman:
-                    statsManager.RegisterQuarantinedHuman(Mathf.Abs(result.MoraleDelta));
+                    int moralePenalty = Mathf.Abs(result.MoraleDelta);
+                    if (upgradeSystem != null)
+                    {
+                        moralePenalty = upgradeSystem.ApplyMoralePenaltyReduction(moralePenalty);
+                    }
+
+                    statsManager.RegisterQuarantinedHuman(moralePenalty);
                     break;
                 default:
                     throw new ArgumentOutOfRangeException();
             }
         }
 
+        private void ResolveCharacterExit(DecisionType decision)
+        {
+            if (decision == DecisionType.Admit)
+            {
+                WalkCurrentSurvivorToShelter();
+                return;
+            }
+
+            ThrowCurrentSurvivor(decision);
+        }
+
+        private void WalkCurrentSurvivorToShelter()
+        {
+            if (currentSurvivor == null)
+            {
+                return;
+            }
+
+            currentSurvivor.OnReachedDecisionPoint -= HandleSurvivorReachedDecisionPoint;
+
+            if (shelterGate != null)
+            {
+                currentSurvivor.WalkToExitPoint(shelterGate, admitExitWalkSpeed, admitExitDespawnDelay);
+                return;
+            }
+
+            currentSurvivor.WalkToExitPoint(currentSurvivor.transform.position + Vector3.right * 5f, admitExitWalkSpeed, admitExitDespawnDelay);
+        }
+
         private void ThrowCurrentSurvivor(DecisionType decision)
         {
             RagdollController ragdollController = currentSurvivor.GetComponent<RagdollController>();
-            Vector3 throwDirection = decision == DecisionType.Admit ? Vector3.right : Vector3.left;
+            Vector3 throwDirection = GetThrowDirection(decision);
 
             if (ragdollController != null)
             {
-                ragdollController.Throw(throwDirection, throwForce);
+                ragdollController.Throw(throwDirection, throwForce, upwardForce, torqueForce);
             }
+        }
+
+        private Vector3 GetThrowDirection(DecisionType decision)
+        {
+            Transform targetZone = decision == DecisionType.Admit ? shelterGate : quarantineZone;
+
+            if (targetZone == null || currentSurvivor == null)
+            {
+                return decision == DecisionType.Admit ? Vector3.right : Vector3.left;
+            }
+
+            Vector3 direction = targetZone.position - currentSurvivor.transform.position;
+            direction.y = 0f;
+            return direction.sqrMagnitude > 0.001f
+                ? direction.normalized
+                : decision == DecisionType.Admit ? Vector3.right : Vector3.left;
         }
 
         private IEnumerator SpawnNextSurvivorAfterDelay()
@@ -288,6 +385,22 @@ namespace BiteCheck.Core
                 point.transform.SetParent(transform, false);
                 point.transform.localPosition = new Vector3(0f, 0f, -1.5f);
                 decisionPoint = point.transform;
+            }
+
+            if (quarantineZone == null)
+            {
+                GameObject zone = new GameObject("LeftQuarantineZone");
+                zone.transform.SetParent(transform, false);
+                zone.transform.localPosition = new Vector3(-3.5f, 0f, -1.5f);
+                quarantineZone = zone.transform;
+            }
+
+            if (shelterGate == null)
+            {
+                GameObject gate = new GameObject("RightShelterGate");
+                gate.transform.SetParent(transform, false);
+                gate.transform.localPosition = new Vector3(3.5f, 0f, -1.5f);
+                shelterGate = gate.transform;
             }
         }
     }

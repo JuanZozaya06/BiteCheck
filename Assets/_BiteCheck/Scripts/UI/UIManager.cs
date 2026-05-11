@@ -9,12 +9,22 @@ namespace BiteCheck.UI
 {
     public class UIManager : MonoBehaviour
     {
+        private enum UiFlowState
+        {
+            MainMenu,
+            Playing,
+            DaySummary,
+            GameOver
+        }
+
+        [SerializeField] private GameManager gameManager;
         [SerializeField] private StatsManager statsManager;
         [SerializeField] private RoundManager roundManager;
+        [SerializeField] private UpgradeSystem upgradeSystem;
         [SerializeField] private Color primaryTextColor = Color.white;
         [SerializeField] private Color feedbackTextColor = new Color(1f, 0.88f, 0.35f);
         [SerializeField] private float feedbackPulseDuration = 0.35f;
-        [SerializeField] private int feedbackPulseFontBoost = 10;
+        [SerializeField] private int feedbackPulseFontBoost = 14;
 
         private Component titleLabel;
         private Component statsLabel;
@@ -27,7 +37,6 @@ namespace BiteCheck.UI
         private Component leftLabel;
         private Component rightLabel;
         private SurvivorCase currentCase;
-        private bool missingTextWarningShown;
         private string titleText = "Bite Check";
         private string statsText = string.Empty;
         private string timerText = "Time: --";
@@ -42,8 +51,16 @@ namespace BiteCheck.UI
         private GUIStyle bodyStyle;
         private GUIStyle feedbackStyle;
         private GUIStyle actionStyle;
+        private GUIStyle panelStyle;
+        private GUIStyle buttonStyle;
+        private GUIStyle subtitleStyle;
+        private GUIStyle overlayTitleStyle;
+        private GUIStyle hudPanelStyle;
         private float timerPercent;
         private float feedbackPulseTimer;
+        private bool showingDaySummary;
+        private DaySummary activeDaySummary;
+        private UiFlowState flowState = UiFlowState.MainMenu;
 
         private void Awake()
         {
@@ -52,9 +69,19 @@ namespace BiteCheck.UI
                 statsManager = FindFirstObjectByType<StatsManager>();
             }
 
+            if (gameManager == null)
+            {
+                gameManager = FindFirstObjectByType<GameManager>();
+            }
+
             if (roundManager == null)
             {
                 roundManager = FindFirstObjectByType<RoundManager>();
+            }
+
+            if (upgradeSystem == null)
+            {
+                upgradeSystem = FindFirstObjectByType<UpgradeSystem>();
             }
 
             BuildUi();
@@ -65,6 +92,13 @@ namespace BiteCheck.UI
 
         private void OnEnable()
         {
+            if (gameManager != null)
+            {
+                gameManager.OnRunStarted += HandleRunStarted;
+                gameManager.OnDayStarted += HandleDayStarted;
+                gameManager.OnDaySummaryReady += HandleDaySummaryReady;
+            }
+
             if (statsManager != null)
             {
                 statsManager.OnStatsChanged += RefreshStats;
@@ -79,10 +113,22 @@ namespace BiteCheck.UI
                 roundManager.OnDecisionResolved += HandleDecisionResolved;
                 roundManager.OnDecisionTimerChanged += HandleDecisionTimerChanged;
             }
+
+            if (upgradeSystem != null)
+            {
+                upgradeSystem.OnUpgradesChanged += HandleUpgradesChanged;
+            }
         }
 
         private void OnDisable()
         {
+            if (gameManager != null)
+            {
+                gameManager.OnRunStarted -= HandleRunStarted;
+                gameManager.OnDayStarted -= HandleDayStarted;
+                gameManager.OnDaySummaryReady -= HandleDaySummaryReady;
+            }
+
             if (statsManager != null)
             {
                 statsManager.OnStatsChanged -= RefreshStats;
@@ -97,6 +143,11 @@ namespace BiteCheck.UI
                 roundManager.OnDecisionResolved -= HandleDecisionResolved;
                 roundManager.OnDecisionTimerChanged -= HandleDecisionTimerChanged;
             }
+
+            if (upgradeSystem != null)
+            {
+                upgradeSystem.OnUpgradesChanged -= HandleUpgradesChanged;
+            }
         }
 
         private void OnGUI()
@@ -104,21 +155,42 @@ namespace BiteCheck.UI
             EnsureGuiStyles();
             UpdateFeedbackPulseStyle();
 
-            float width = Screen.width;
+            Rect safeArea = GetSafeAreaRect();
+            float width = safeArea.width;
             float margin = 14f;
             float contentWidth = width - margin * 2f;
+            float originX = safeArea.x;
+            float originY = safeArea.y;
 
-            GUI.Label(new Rect(margin, 10f, contentWidth, 42f), titleText, titleStyle);
-            GUI.Label(new Rect(margin, 58f, contentWidth, 82f), statsText, bodyStyle);
-            GUI.Label(new Rect(margin, 138f, contentWidth, 30f), timerText, feedbackStyle);
-            DrawTimerBar(new Rect(margin, 170f, contentWidth, 10f));
-            GUI.Label(new Rect(margin, 190f, contentWidth, 38f), survivorNameText, titleStyle);
-            GUI.Label(new Rect(margin, 232f, contentWidth, 30f), ageText, bodyStyle);
-            GUI.Label(new Rect(margin, 268f, contentWidth, 78f), dialogueText, bodyStyle);
-            GUI.Label(new Rect(margin, 350f, contentWidth, 128f), symptomsText, bodyStyle);
-            GUI.Label(new Rect(margin, Screen.height - 156f, contentWidth, 76f), feedbackText, feedbackStyle);
-            GUI.Label(new Rect(margin, Screen.height - 58f, 170f, 40f), leftText, actionStyle);
-            GUI.Label(new Rect(width - margin - 170f, Screen.height - 58f, 170f, 40f), rightText, actionStyle);
+            if (flowState == UiFlowState.MainMenu)
+            {
+                DrawMainMenu(safeArea);
+                return;
+            }
+
+            DrawHudPanels(safeArea, margin);
+            GUI.Label(new Rect(originX + margin, originY + 10f, contentWidth, 42f), titleText, titleStyle);
+            GUI.Label(new Rect(originX + margin, originY + 58f, contentWidth, 82f), statsText, bodyStyle);
+            GUI.Label(new Rect(originX + margin, originY + 138f, contentWidth, 30f), timerText, feedbackStyle);
+            DrawTimerBar(new Rect(originX + margin, originY + 170f, contentWidth, 10f));
+            GUI.Label(new Rect(originX + margin, originY + 190f, contentWidth, 38f), survivorNameText, titleStyle);
+            GUI.Label(new Rect(originX + margin, originY + 232f, contentWidth, 30f), ageText, bodyStyle);
+            GUI.Label(new Rect(originX + margin, originY + 268f, contentWidth, 78f), dialogueText, bodyStyle);
+            GUI.Label(new Rect(originX + margin, originY + 350f, contentWidth, 128f), symptomsText, bodyStyle);
+            GUI.Label(new Rect(originX + margin, safeArea.yMax - 158f, contentWidth, 78f), feedbackText, feedbackStyle);
+            GUI.Label(new Rect(originX + margin, safeArea.yMax - 58f, 170f, 40f), leftText, actionStyle);
+            GUI.Label(new Rect(safeArea.xMax - margin - 170f, safeArea.yMax - 58f, 170f, 40f), rightText, actionStyle);
+
+            if (flowState == UiFlowState.GameOver)
+            {
+                DrawGameOver(safeArea);
+                return;
+            }
+
+            if (showingDaySummary && activeDaySummary != null)
+            {
+                DrawDaySummary(safeArea);
+            }
         }
 
         private void BuildUi()
@@ -150,7 +222,6 @@ namespace BiteCheck.UI
             Type textType = FindType("TMPro.TextMeshProUGUI", "UnityEngine.UI.Text");
             if (textType == null)
             {
-                ShowMissingTextWarning();
                 return null;
             }
 
@@ -164,6 +235,7 @@ namespace BiteCheck.UI
 
         private void HandleSurvivorSpawned(SurvivorCase survivorCase)
         {
+            showingDaySummary = false;
             currentCase = survivorCase;
             RefreshCase();
             feedbackText = "Inspect symptoms, then swipe.";
@@ -180,7 +252,7 @@ namespace BiteCheck.UI
 
         private void HandleDecisionResolved(DecisionResult result)
         {
-            feedbackText = result.FeedbackMessage;
+            feedbackText = GetFeedbackDisplayText(result);
             SetText(feedbackLabel, feedbackText);
             PulseFeedbackText();
         }
@@ -189,11 +261,18 @@ namespace BiteCheck.UI
         {
             timerPercent = duration > 0f ? Mathf.Clamp01(remaining / duration) : 0f;
             timerText = remaining > 0f ? $"Time: {remaining:0.0}s" : "Time: --";
+            if (remaining > 0f && remaining <= 1.5f)
+            {
+                timerText = $"DECIDE NOW: {remaining:0.0}s";
+            }
+
             SetText(timerLabel, timerText);
         }
 
         private void HandleGameOver()
         {
+            flowState = UiFlowState.GameOver;
+            showingDaySummary = false;
             feedbackText = "GAME OVER";
             SetText(feedbackLabel, feedbackText);
             PulseFeedbackText();
@@ -202,6 +281,37 @@ namespace BiteCheck.UI
         private void HandleDayComplete()
         {
             feedbackText = $"DAY {statsManager.Day} COMPLETE";
+            SetText(feedbackLabel, feedbackText);
+            PulseFeedbackText();
+        }
+
+        private void HandleRunStarted()
+        {
+            flowState = UiFlowState.Playing;
+            showingDaySummary = false;
+            activeDaySummary = null;
+        }
+
+        private void HandleDayStarted(int day)
+        {
+            flowState = UiFlowState.Playing;
+            showingDaySummary = false;
+            activeDaySummary = null;
+            feedbackText = $"Day {day}. Check them fast.";
+            SetText(feedbackLabel, feedbackText);
+            PulseFeedbackText();
+        }
+
+        private void HandleDaySummaryReady(DaySummary summary)
+        {
+            flowState = UiFlowState.DaySummary;
+            activeDaySummary = summary;
+            showingDaySummary = true;
+            ClearCase();
+            timerText = "Time: --";
+            timerPercent = 0f;
+            SetText(timerLabel, timerText);
+            feedbackText = $"DAY {summary.DayCompleted} COMPLETE";
             SetText(feedbackLabel, feedbackText);
             PulseFeedbackText();
         }
@@ -227,10 +337,17 @@ namespace BiteCheck.UI
                 return;
             }
 
+            int visibleClues = Mathf.Min(currentCase.Symptoms.Count, 2 + (upgradeSystem != null ? upgradeSystem.ExtraVisibleClues : 0));
+            string[] visibleSymptoms = new string[visibleClues];
+            for (int i = 0; i < visibleClues; i++)
+            {
+                visibleSymptoms[i] = currentCase.Symptoms[i];
+            }
+
             survivorNameText = currentCase.DisplayName;
             ageText = $"Age: {currentCase.Age}";
             dialogueText = currentCase.Dialogue;
-            symptomsText = $"Symptoms:\n- {string.Join("\n- ", currentCase.Symptoms)}";
+            symptomsText = $"Symptoms:\n- {string.Join("\n- ", visibleSymptoms)}";
 
             SetText(survivorNameLabel, survivorNameText);
             SetText(ageLabel, ageText);
@@ -249,6 +366,29 @@ namespace BiteCheck.UI
             SetText(ageLabel, ageText);
             SetText(dialogueLabel, dialogueText);
             SetText(symptomsLabel, symptomsText);
+        }
+
+        private void HandleUpgradesChanged()
+        {
+            RefreshStats();
+            RefreshCase();
+        }
+
+        private string GetFeedbackDisplayText(DecisionResult result)
+        {
+            if (result == null)
+            {
+                return string.Empty;
+            }
+
+            if (result.Correct)
+            {
+                return $"CORRECT\n{result.FeedbackMessage}";
+            }
+
+            return result.ResultType == DecisionResultType.WrongAdmitInfected
+                ? $"SECURITY HIT\n{result.FeedbackMessage}"
+                : $"MORALE HIT\n{result.FeedbackMessage}";
         }
 
         private void SetText(Component textComponent, string value)
@@ -399,10 +539,106 @@ namespace BiteCheck.UI
             }
 
             titleStyle = CreateGuiStyle(22, FontStyle.Bold, primaryTextColor);
-            bodyStyle = CreateGuiStyle(15, FontStyle.Normal, primaryTextColor);
-            feedbackStyle = CreateGuiStyle(16, FontStyle.Bold, feedbackTextColor);
-            actionStyle = CreateGuiStyle(16, FontStyle.Bold, primaryTextColor);
+            bodyStyle = CreateGuiStyle(16, FontStyle.Normal, primaryTextColor);
+            feedbackStyle = CreateGuiStyle(18, FontStyle.Bold, feedbackTextColor);
+            actionStyle = CreateGuiStyle(17, FontStyle.Bold, primaryTextColor);
             actionStyle.alignment = TextAnchor.MiddleCenter;
+            subtitleStyle = CreateGuiStyle(16, FontStyle.Normal, primaryTextColor);
+            subtitleStyle.alignment = TextAnchor.MiddleCenter;
+            overlayTitleStyle = CreateGuiStyle(34, FontStyle.Bold, primaryTextColor);
+            overlayTitleStyle.alignment = TextAnchor.MiddleCenter;
+            panelStyle = new GUIStyle(GUI.skin.box);
+            panelStyle.normal.textColor = primaryTextColor;
+            hudPanelStyle = new GUIStyle(GUI.skin.box);
+            hudPanelStyle.normal.background = Texture2D.whiteTexture;
+            hudPanelStyle.normal.textColor = primaryTextColor;
+            buttonStyle = new GUIStyle(GUI.skin.button);
+            buttonStyle.fontSize = 18;
+            buttonStyle.fontStyle = FontStyle.Bold;
+        }
+
+        private void DrawHudPanels(Rect safeArea, float margin)
+        {
+            Color previousColor = GUI.color;
+            GUI.color = new Color(0f, 0f, 0f, 0.48f);
+            GUI.Box(new Rect(safeArea.x + margin * 0.5f, safeArea.y + 6f, safeArea.width - margin, 176f), string.Empty, hudPanelStyle);
+            GUI.Box(new Rect(safeArea.x + margin * 0.5f, safeArea.y + 184f, safeArea.width - margin, 300f), string.Empty, hudPanelStyle);
+            GUI.Box(new Rect(safeArea.x + margin * 0.5f, safeArea.yMax - 166f, safeArea.width - margin, 152f), string.Empty, hudPanelStyle);
+            GUI.color = previousColor;
+        }
+
+        private Rect GetSafeAreaRect()
+        {
+            Rect safeArea = Screen.safeArea;
+            if (safeArea.width <= 0f || safeArea.height <= 0f)
+            {
+                return new Rect(0f, 0f, Screen.width, Screen.height);
+            }
+
+            return new Rect(
+                safeArea.x,
+                Screen.height - safeArea.yMax,
+                safeArea.width,
+                safeArea.height);
+        }
+
+        private void DrawMainMenu(Rect safeArea)
+        {
+            float panelWidth = Mathf.Min(safeArea.width - 28f, 390f);
+            float panelHeight = 300f;
+            Rect panelRect = new Rect(
+                safeArea.x + (safeArea.width - panelWidth) * 0.5f,
+                safeArea.y + (safeArea.height - panelHeight) * 0.5f,
+                panelWidth,
+                panelHeight);
+
+            GUI.Box(panelRect, string.Empty, panelStyle);
+
+            float x = panelRect.x + 18f;
+            float y = panelRect.y + 28f;
+            float width = panelRect.width - 36f;
+
+            GUI.Label(new Rect(x, y, width, 58f), "Bite Check", overlayTitleStyle);
+            y += 72f;
+            GUI.Label(new Rect(x, y, width, 78f), "Spot the infected. Swipe fast. Don't doom the shelter.", subtitleStyle);
+            y += 104f;
+
+            if (GUI.Button(new Rect(x, y, width, 56f), "START", buttonStyle))
+            {
+                gameManager?.StartRun();
+            }
+        }
+
+        private void DrawGameOver(Rect safeArea)
+        {
+            float panelWidth = Mathf.Min(safeArea.width - 28f, 380f);
+            float panelHeight = 330f;
+            Rect panelRect = new Rect(
+                safeArea.x + (safeArea.width - panelWidth) * 0.5f,
+                safeArea.y + (safeArea.height - panelHeight) * 0.5f,
+                panelWidth,
+                panelHeight);
+
+            GUI.Box(panelRect, string.Empty, panelStyle);
+
+            float x = panelRect.x + 18f;
+            float y = panelRect.y + 24f;
+            float width = panelRect.width - 36f;
+
+            GUI.Label(new Rect(x, y, width, 52f), "Game Over", overlayTitleStyle);
+            y += 68f;
+
+            string summary = statsManager == null
+                ? "The shelter did not make it."
+                : $"Day reached: {statsManager.Day}\nSecurity: {statsManager.Security}\nMorale: {statsManager.Morale}\nResources: {statsManager.Resources}";
+
+            GUI.Label(new Rect(x, y, width, 120f), summary, bodyStyle);
+            y += 150f;
+
+            if (GUI.Button(new Rect(x, y, width, 56f), "RESTART", buttonStyle))
+            {
+                gameManager?.RestartRun();
+            }
         }
 
         private void DrawTimerBar(Rect rect)
@@ -416,6 +652,79 @@ namespace BiteCheck.UI
             GUI.color = Color.Lerp(Color.red, Color.green, timerPercent);
             GUI.DrawTexture(fillRect, Texture2D.whiteTexture);
             GUI.color = previousColor;
+        }
+
+        private void DrawDaySummary(Rect safeArea)
+        {
+            float panelWidth = Mathf.Min(safeArea.width - 28f, 360f);
+            float panelHeight = 450f;
+            Rect panelRect = new Rect(
+                safeArea.x + (safeArea.width - panelWidth) * 0.5f,
+                safeArea.y + (safeArea.height - panelHeight) * 0.5f,
+                panelWidth,
+                panelHeight);
+
+            GUI.Box(panelRect, string.Empty, panelStyle);
+
+            float x = panelRect.x + 18f;
+            float y = panelRect.y + 18f;
+            float width = panelRect.width - 36f;
+
+            GUI.Label(new Rect(x, y, width, 34f), $"Day {activeDaySummary.DayCompleted} completed", titleStyle);
+            y += 48f;
+            GUI.Label(
+                new Rect(x, y, width, 150f),
+                $"Correct decisions: {activeDaySummary.CorrectDecisions}\nWrong decisions: {activeDaySummary.WrongDecisions}\nSecurity: {activeDaySummary.Security}\nMorale: {activeDaySummary.Morale}\nResources earned: {activeDaySummary.ResourcesEarned}\nTotal resources: {activeDaySummary.TotalResources}",
+                bodyStyle);
+            y += 160f;
+
+            DrawUpgradeButton(
+                new Rect(x, y, width, 38f),
+                "Better Scanner",
+                UpgradeSystem.BetterScannerCost,
+                upgradeSystem != null && upgradeSystem.BetterScannerOwned,
+                upgradeSystem != null && upgradeSystem.CanBuyBetterScanner(),
+                () => upgradeSystem.BuyBetterScanner());
+            y += 44f;
+
+            DrawUpgradeButton(
+                new Rect(x, y, width, 38f),
+                "Reinforced Gate",
+                UpgradeSystem.ReinforcedGateCost,
+                upgradeSystem != null && upgradeSystem.ReinforcedGateOwned,
+                upgradeSystem != null && upgradeSystem.CanBuyReinforcedGate(),
+                () => upgradeSystem.BuyReinforcedGate());
+            y += 44f;
+
+            DrawUpgradeButton(
+                new Rect(x, y, width, 38f),
+                "Public Trust",
+                UpgradeSystem.PublicTrustCost,
+                upgradeSystem != null && upgradeSystem.PublicTrustOwned,
+                upgradeSystem != null && upgradeSystem.CanBuyPublicTrust(),
+                () => upgradeSystem.BuyPublicTrust());
+            y += 52f;
+
+            if (GUI.Button(new Rect(x, y, width, 50f), "CONTINUE", buttonStyle))
+            {
+                showingDaySummary = false;
+                flowState = UiFlowState.Playing;
+                gameManager?.ContinueToNextDay();
+            }
+        }
+
+        private void DrawUpgradeButton(Rect rect, string upgradeName, int cost, bool owned, bool canBuy, Action buyAction)
+        {
+            bool previousEnabled = GUI.enabled;
+            GUI.enabled = !owned && canBuy;
+
+            string label = owned ? $"{upgradeName}: OWNED" : $"{upgradeName}: {cost} resources";
+            if (GUI.Button(rect, label, buttonStyle))
+            {
+                buyAction?.Invoke();
+            }
+
+            GUI.enabled = previousEnabled;
         }
 
         private void PulseFeedbackText()
@@ -453,15 +762,5 @@ namespace BiteCheck.UI
             return style;
         }
 
-        private void ShowMissingTextWarning()
-        {
-            if (missingTextWarningShown)
-            {
-                return;
-            }
-
-            missingTextWarningShown = true;
-            Debug.LogWarning("UIManager could not find TextMeshProUGUI or UnityEngine.UI.Text. Install TextMeshPro or uGUI to show prototype text.", this);
-        }
     }
 }

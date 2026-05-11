@@ -1,4 +1,5 @@
 using BiteCheck.Core;
+using BiteCheck.Data;
 using BiteCheck.Systems;
 using UnityEngine;
 
@@ -7,6 +8,7 @@ namespace BiteCheck.UI
     public class FeedbackEffectsController : MonoBehaviour
     {
         [Header("References")]
+        [SerializeField] private StatsManager statsManager;
         [SerializeField] private RoundManager roundManager;
         [SerializeField] private Camera targetCamera;
         [SerializeField] private AudioSource audioSource;
@@ -26,6 +28,10 @@ namespace BiteCheck.UI
         [SerializeField] private AudioClip wrongClip;
         [SerializeField] private AudioClip admittedInfectedClip;
         [SerializeField] private AudioClip quarantinedHumanClip;
+        [SerializeField] private AudioClip survivorReadyClip;
+        [SerializeField] private AudioClip dayCompleteClip;
+        [SerializeField] private AudioClip gameOverClip;
+        [SerializeField] private float pitchVariation = 0.04f;
 
         private Color activeFlashColor;
         private float flashTimer;
@@ -35,6 +41,11 @@ namespace BiteCheck.UI
 
         private void Awake()
         {
+            if (statsManager == null)
+            {
+                statsManager = FindFirstObjectByType<StatsManager>();
+            }
+
             if (roundManager == null)
             {
                 roundManager = FindFirstObjectByType<RoundManager>();
@@ -55,7 +66,14 @@ namespace BiteCheck.UI
         {
             if (roundManager != null)
             {
+                roundManager.OnSurvivorReadyForDecision += HandleSurvivorReadyForDecision;
                 roundManager.OnDecisionResolved += HandleDecisionResolved;
+            }
+
+            if (statsManager != null)
+            {
+                statsManager.OnDayComplete += HandleDayComplete;
+                statsManager.OnGameOver += HandleGameOver;
             }
         }
 
@@ -63,7 +81,14 @@ namespace BiteCheck.UI
         {
             if (roundManager != null)
             {
+                roundManager.OnSurvivorReadyForDecision -= HandleSurvivorReadyForDecision;
                 roundManager.OnDecisionResolved -= HandleDecisionResolved;
+            }
+
+            if (statsManager != null)
+            {
+                statsManager.OnDayComplete -= HandleDayComplete;
+                statsManager.OnGameOver -= HandleGameOver;
             }
 
             RestoreCamera();
@@ -77,6 +102,11 @@ namespace BiteCheck.UI
             }
 
             UpdateCameraShake();
+        }
+
+        private void HandleSurvivorReadyForDecision(SurvivorCase survivorCase)
+        {
+            PlayClip(survivorReadyClip);
         }
 
         private void OnGUI()
@@ -120,6 +150,16 @@ namespace BiteCheck.UI
             {
                 StartCameraShake();
             }
+        }
+
+        private void HandleDayComplete()
+        {
+            PlayClip(dayCompleteClip);
+        }
+
+        private void HandleGameOver()
+        {
+            PlayClip(gameOverClip != null ? gameOverClip : wrongClip);
         }
 
         private void PlayFlash(Color color)
@@ -183,6 +223,7 @@ namespace BiteCheck.UI
                 return;
             }
 
+            audioSource.pitch = Random.Range(1f - pitchVariation, 1f + pitchVariation);
             audioSource.PlayOneShot(clip);
         }
     }

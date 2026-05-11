@@ -69,6 +69,25 @@ namespace BiteCheck.Systems
             CheckEndStates();
         }
 
+        public bool CanSpendResources(int amount)
+        {
+            return resources >= Mathf.Max(0, amount);
+        }
+
+        public bool TrySpendResources(int amount)
+        {
+            int normalizedAmount = Mathf.Max(0, amount);
+
+            if (resources < normalizedAmount)
+            {
+                return false;
+            }
+
+            resources -= normalizedAmount;
+            RaiseStatsChanged();
+            return true;
+        }
+
         public void RegisterAdmittedInfected(int penalty)
         {
             security -= Mathf.Max(0, penalty);

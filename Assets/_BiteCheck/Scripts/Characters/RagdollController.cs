@@ -13,8 +13,10 @@ namespace BiteCheck.Characters
         [SerializeField] private Collider[] ragdollColliders;
 
         [Header("Throw")]
-        [SerializeField] private float upwardForce = 0.12f;
-        [SerializeField] private float torqueForce = 8f;
+        [SerializeField] private float upwardForce = 0.08f;
+        [SerializeField] private float torqueForce = 1.5f;
+        [SerializeField] private float directionVariation = 0.05f;
+        [SerializeField] private float forceVariation = 0.08f;
         [SerializeField] private float despawnDelay = 2.5f;
 
         private SurvivorCharacter survivorCharacter;
@@ -54,6 +56,11 @@ namespace BiteCheck.Characters
 
         public void Throw(Vector3 direction, float force)
         {
+            Throw(direction, force, upwardForce, torqueForce);
+        }
+
+        public void Throw(Vector3 direction, float force, float customUpwardForce, float customTorqueForce)
+        {
             if (thrown)
             {
                 return;
@@ -73,15 +80,18 @@ namespace BiteCheck.Characters
                 ? direction.normalized
                 : transform.right;
 
-            Vector3 impulse = (throwDirection + Vector3.up * upwardForce).normalized * force;
+            throwDirection = ApplyDirectionVariation(throwDirection);
+            float variedForce = Mathf.Max(0f, force * Random.Range(1f - forceVariation, 1f + forceVariation));
+            Vector3 impulse = throwDirection * variedForce;
+            impulse += Vector3.up * Mathf.Max(0f, customUpwardForce) * variedForce;
 
             if (HasRagdollBodies())
             {
-                ApplyImpulseToBodies(ragdollBodies, impulse);
+                ApplyImpulseToBodies(ragdollBodies, impulse, customTorqueForce);
             }
             else if (fallbackBody != null)
             {
-                ApplyImpulse(fallbackBody, impulse);
+                ApplyImpulse(fallbackBody, impulse, customTorqueForce);
             }
 
             Destroy(gameObject, despawnDelay);
@@ -154,8 +164,12 @@ namespace BiteCheck.Characters
 
             if (!physicsEnabled)
             {
+                body.isKinematic = false;
+                body.useGravity = false;
                 body.linearVelocity = Vector3.zero;
                 body.angularVelocity = Vector3.zero;
+                body.isKinematic = true;
+                return;
             }
 
             body.isKinematic = !physicsEnabled;
@@ -185,15 +199,23 @@ namespace BiteCheck.Characters
             targetCollider.enabled = enabledState;
         }
 
-        private void ApplyImpulseToBodies(Rigidbody[] bodies, Vector3 impulse)
+        private Vector3 ApplyDirectionVariation(Vector3 direction)
+        {
+            Vector3 variedDirection = direction;
+            variedDirection.x += Random.Range(-directionVariation, directionVariation);
+            variedDirection.z += Random.Range(-directionVariation, directionVariation);
+            return variedDirection.sqrMagnitude > 0.001f ? variedDirection.normalized : direction;
+        }
+
+        private void ApplyImpulseToBodies(Rigidbody[] bodies, Vector3 impulse, float appliedTorqueForce)
         {
             for (int i = 0; i < bodies.Length; i++)
             {
-                ApplyImpulse(bodies[i], impulse);
+                ApplyImpulse(bodies[i], impulse, appliedTorqueForce);
             }
         }
 
-        private void ApplyImpulse(Rigidbody body, Vector3 impulse)
+        private void ApplyImpulse(Rigidbody body, Vector3 impulse, float appliedTorqueForce)
         {
             if (body == null)
             {
@@ -201,7 +223,11 @@ namespace BiteCheck.Characters
             }
 
             body.AddForce(impulse, ForceMode.Impulse);
-            body.AddTorque(Random.insideUnitSphere * torqueForce, ForceMode.Impulse);
+
+            if (appliedTorqueForce > 0f)
+            {
+                body.AddTorque(Random.insideUnitSphere * appliedTorqueForce, ForceMode.Impulse);
+            }
         }
     }
 }

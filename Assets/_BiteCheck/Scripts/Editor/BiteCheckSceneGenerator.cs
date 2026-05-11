@@ -33,10 +33,11 @@ namespace BiteCheck.Editor
             CreateGround(groundMaterial);
             Transform spawnPoint = CreatePoint("SpawnPoint", new Vector3(0f, 0f, 6f));
             Transform decisionPoint = CreatePoint("DecisionPoint", new Vector3(0f, 0f, -1.5f));
-            CreateZone("LeftQuarantineZone", new Vector3(-3.5f, 0.05f, -1.5f), new Vector3(2f, 0.1f, 3f), quarantineMaterial);
-            CreateZone("RightShelterGate", new Vector3(3.5f, 1f, -1.5f), new Vector3(2f, 2f, 3f), shelterMaterial);
+            Transform quarantineZone = CreateZone("LeftQuarantineZone", new Vector3(-3.5f, 0.05f, -1.5f), new Vector3(2f, 0.1f, 3f), quarantineMaterial);
+            Transform shelterGate = CreateZone("RightShelterGate", new Vector3(3.5f, 1f, -1.5f), new Vector3(2f, 2f, 3f), shelterMaterial);
 
             StatsManager statsManager = new GameObject("StatsManager").AddComponent<StatsManager>();
+            UpgradeSystem upgradeSystem = new GameObject("UpgradeSystem").AddComponent<UpgradeSystem>();
             SwipeInputController swipeInput = new GameObject("SwipeInputController").AddComponent<SwipeInputController>();
             RoundManager roundManager = new GameObject("RoundManager").AddComponent<RoundManager>();
             GameManager gameManager = new GameObject("GameManager").AddComponent<GameManager>();
@@ -50,11 +51,20 @@ namespace BiteCheck.Editor
             SetObjectReference(roundManager, "swipeInput", swipeInput);
             SetObjectReference(roundManager, "spawnPoint", spawnPoint);
             SetObjectReference(roundManager, "decisionPoint", decisionPoint);
+            SetObjectReference(roundManager, "quarantineZone", quarantineZone);
+            SetObjectReference(roundManager, "shelterGate", shelterGate);
+            SetObjectReference(roundManager, "upgradeSystem", upgradeSystem);
+            SetObjectReference(upgradeSystem, "statsManager", statsManager);
             SetObjectReference(gameManager, "statsManager", statsManager);
             SetObjectReference(gameManager, "roundManager", roundManager);
+            SetObjectReference(gameManager, "upgradeSystem", upgradeSystem);
+            SetBool(gameManager, "startOnAwake", false);
             SetObjectReference(uiManager, "statsManager", statsManager);
             SetObjectReference(uiManager, "roundManager", roundManager);
+            SetObjectReference(uiManager, "gameManager", gameManager);
+            SetObjectReference(uiManager, "upgradeSystem", upgradeSystem);
             SetObjectReference(feedbackEffects, "roundManager", roundManager);
+            SetObjectReference(feedbackEffects, "statsManager", statsManager);
             SetObjectReference(feedbackEffects, "targetCamera", mainCamera);
             SetObjectReference(feedbackEffects, "audioSource", feedbackAudioSource);
 
@@ -113,9 +123,9 @@ namespace BiteCheck.Editor
             camera.tag = "MainCamera";
             camera.clearFlags = CameraClearFlags.Skybox;
             camera.orthographic = true;
-            camera.orthographicSize = 5.2f;
-            cameraObject.transform.position = new Vector3(0f, 5.5f, -9f);
-            cameraObject.transform.rotation = Quaternion.Euler(38f, 0f, 0f);
+            camera.orthographicSize = 4.4f;
+            cameraObject.transform.position = new Vector3(0f, 3.2f, -5.5f);
+            cameraObject.transform.rotation = Quaternion.Euler(24f, 0f, 0f);
             return camera;
         }
 
@@ -151,13 +161,21 @@ namespace BiteCheck.Editor
             return point.transform;
         }
 
-        private static void CreateZone(string name, Vector3 position, Vector3 scale, Material material)
+        private static Transform CreateZone(string name, Vector3 position, Vector3 scale, Material material)
         {
             GameObject zone = GameObject.CreatePrimitive(PrimitiveType.Cube);
             zone.name = name;
             zone.transform.position = position;
             zone.transform.localScale = scale;
             zone.GetComponent<Renderer>().sharedMaterial = material;
+
+            Collider zoneCollider = zone.GetComponent<Collider>();
+            if (zoneCollider != null)
+            {
+                Object.DestroyImmediate(zoneCollider);
+            }
+
+            return zone.transform;
         }
 
         private static GameObject CreateCanvas()
@@ -165,8 +183,10 @@ namespace BiteCheck.Editor
             GameObject canvasObject = new GameObject("Canvas");
             Canvas canvas = canvasObject.AddComponent<Canvas>();
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvasObject.AddComponent<SafeAreaFitter>();
 
-            AddOptionalComponent(canvasObject, "UnityEngine.UI.CanvasScaler, UnityEngine.UI");
+            Component canvasScaler = AddOptionalComponent(canvasObject, "UnityEngine.UI.CanvasScaler, UnityEngine.UI");
+            ConfigureCanvasScaler(canvasScaler);
             AddOptionalComponent(canvasObject, "UnityEngine.UI.GraphicRaycaster, UnityEngine.UI");
             return canvasObject;
         }
@@ -194,14 +214,52 @@ namespace BiteCheck.Editor
             }
         }
 
-        private static void AddOptionalComponent(GameObject target, string typeName)
+        private static Component AddOptionalComponent(GameObject target, string typeName)
         {
             System.Type type = System.Type.GetType(typeName);
 
             if (type != null)
             {
-                target.AddComponent(type);
+                return target.AddComponent(type);
             }
+
+            return null;
+        }
+
+        private static void ConfigureCanvasScaler(Component canvasScaler)
+        {
+            if (canvasScaler == null)
+            {
+                return;
+            }
+
+            SetEnumProperty(canvasScaler, "uiScaleMode", "ScaleWithScreenSize");
+            SetProperty(canvasScaler, "referenceResolution", new Vector2(1080f, 1920f));
+            SetEnumProperty(canvasScaler, "screenMatchMode", "MatchWidthOrHeight");
+            SetProperty(canvasScaler, "matchWidthOrHeight", 0.5f);
+        }
+
+        private static void SetProperty(Component target, string propertyName, object value)
+        {
+            System.Reflection.PropertyInfo property = target.GetType().GetProperty(propertyName);
+
+            if (property != null && property.CanWrite)
+            {
+                property.SetValue(target, value);
+            }
+        }
+
+        private static void SetEnumProperty(Component target, string propertyName, string enumValue)
+        {
+            System.Reflection.PropertyInfo property = target.GetType().GetProperty(propertyName);
+
+            if (property == null || !property.CanWrite || !property.PropertyType.IsEnum)
+            {
+                return;
+            }
+
+            object value = System.Enum.Parse(property.PropertyType, enumValue);
+            property.SetValue(target, value);
         }
 
         private static bool HasObjectOfType(System.Type type)
@@ -249,6 +307,22 @@ namespace BiteCheck.Editor
             }
 
             property.objectReferenceValue = value;
+            serializedObject.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(target);
+        }
+
+        private static void SetBool(Object target, string propertyName, bool value)
+        {
+            SerializedObject serializedObject = new SerializedObject(target);
+            SerializedProperty property = serializedObject.FindProperty(propertyName);
+
+            if (property == null)
+            {
+                Debug.LogWarning($"Could not find serialized property '{propertyName}' on {target.name}.", target);
+                return;
+            }
+
+            property.boolValue = value;
             serializedObject.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(target);
         }
